@@ -77,7 +77,7 @@ def process_cg_region(region_name, CG_table, tail_ext=0.2, head_ext = 0.1, width
 
 def query_region(p1, p2, p3, p4, region_name):
     folder_name = f"/Users/anniegao/Documents/CG_mapping_files/1-queried_stars/{region_name}"
-    os.makedirs(folder_name, exist_ok=True)
+    # os.makedirs(folder_name, exist_ok=True)
     four_corner = np.concatenate([p1, p2, p3, p4]).tolist()
     query1 = f"""
         SELECT *
@@ -116,7 +116,7 @@ def query_region(p1, p2, p3, p4, region_name):
     print(f"[{region_name}] All catalogs merged and saved to:\n→ {output_path}")
     return decaps_2mass_gaia
 
-def clean_and_fit(pd_merged, base, region_name): 
+def clean_and_fit(pd_merged, base, region_name, cut_val1 = 0.78, cut_val2 = 22): 
     """
     Return data frame, parallax, and parallax error that were used for fitting into Brutus; save the fitted file.
     """
@@ -136,10 +136,10 @@ def clean_and_fit(pd_merged, base, region_name):
 
     dist_select = pd_merged[~((pd_merged['Plx']< 1000/600)|(pd_merged['Plx']>1000/200))]
     merged_table = Table.from_pandas(dist_select)
-    Ag, Ar, Ai = 1.3285, 0.700, 0.3529 #3.384, 2.483, 1.838
+    Ag, Ar, Ai = 1.272392, 0.876292, 0.678924 #3.384, 2.483, 1.838
     mDwarf1 = merged_table['mean_mag_g']- (Ag/(Ag-Ar))* (merged_table['mean_mag_g'] - merged_table['mean_mag_r']-1.4)
     mDwarf2 = merged_table['mean_mag_r'] - merged_table['mean_mag_i'] - (Ar-Ai)/(Ag-Ar) *(merged_table['mean_mag_g']-merged_table['mean_mag_r']-1.4)
-    m_dwarf_table = merged_table[(mDwarf1<22) & (mDwarf2>0.78)]
+    m_dwarf_table = merged_table[(mDwarf1<cut_val2) & (mDwarf2>cut_val1)]
 
     flux_decam = np.c_[m_dwarf_table['mean_g'].value, m_dwarf_table['mean_r'].value, m_dwarf_table['mean_i'].value, m_dwarf_table['mean_z'].value, m_dwarf_table['mean_y'].value]
     flux_decam_err = np.c_[m_dwarf_table['err_g'].value, m_dwarf_table['err_r'].value, m_dwarf_table['err_i'].value,m_dwarf_table['err_z'].value, m_dwarf_table['err_y'].value]
@@ -269,8 +269,10 @@ def run_nested_sampling(base, region_name):
     merged_table.to_csv(f'{base}2-star_modeling/M_dwarf_fit_results/{region_name}_Mdwarf_res.csv', index= False)
 
     
-    # convert from kpc to distance modulus
-    dms_mist = 5. * np.log10(dists_mist) + 10
+    # convert from kpc to distance modulus, add limit of 10.5 distance modulus to avoid confusion
+    dist_mist_new = dists_mist[x_max<10.5]
+    red_mist_new = reds_mist[x_max<10.5]
+    dms_mist = 5. * np.log10(dist_mist_new) + 10
     nclouds = 1  # number of clouds
     ndim = 2 * nclouds + 4  # number of parameters
 
@@ -278,7 +280,7 @@ def run_nested_sampling(base, region_name):
     ptform_kwargs = {'dlims': (6., 10.)}
 
     # distances and extinctions to be passed to loglike
-    logl_args = [dms_mist, reds_mist]
+    logl_args = [dms_mist, red_mist_new]
     logl_kwargs = {'monotonic': True}  # extinctions must increase
 
     # fit dust along the LOS with dynesty
@@ -314,7 +316,8 @@ def make_plots(base, region_name):
     ax1.set_ylabel('Extinction (Av)')
     im = ax1.imshow(np.sum(pdfbin, axis=0).T, aspect='auto', cmap='Blues', interpolation=None, origin='lower', 
                     extent=[star_sample['xedges'][0], star_sample['xedges'][-1], star_sample['yedges'][0], star_sample['yedges'][-1]],
-                    vmin=0, vmax=0.08)
+                    # vmin=0, vmax=0.08
+                    )
     ax1.scatter(x_max, y_max, color='red', s=3, alpha=0.6, label='Star max PDF location')
     ax1.axvline(7.4, c='y', alpha=0.5, ls='-.', label='IVS distance')
     ax1.axvspan(6.98, 8.7, facecolor='y', alpha=0.1)
@@ -336,7 +339,7 @@ def make_plots(base, region_name):
                                 show_titles=True,
                                 fig=plt.subplots(6, 6, figsize=(30, 30)))
     fig2.tight_layout()
-    fig2.savefig(f"{plot_path}/{region_name}_corner_plot_.png", dpi=300)
+    fig2.savefig(f"{plot_path}/{region_name}_corner_plot.png", dpi=300)
     plt.close(fig2)
     
     return fig1, fig2
