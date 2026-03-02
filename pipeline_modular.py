@@ -41,7 +41,7 @@ OFFSET_FILE = BASE_PATH / '2-star_modeling/offsets_mist_v9.txt'
 
 config = {
     "mdwarf": {"cut1": 0.78, "cut2": 22.5},
-    "phot_err": {"decam": 0.02, "tmass": 0.03},
+    "phot_err": {"decam": 0.02, "tmass": 0.03, 'unwise': 0.04},
     "chi2_pval": 0.01,
 }
 
@@ -119,16 +119,18 @@ def query_region(p1, p2, p3, p4, region_name):
     gaia_xmatched = XMatch.query(cat1 = df1, cat2='vizier:I/355/gaiadr3', max_distance= 0.5*u.arcsec, colRA1='ra', colDec1='dec')
     df1_pd = df1.to_pandas()
     xmatch_pd = gaia_xmatched.to_pandas()
-    xmatch_pd_tomerge = xmatch_pd.iloc[:, 210:]
-    xmatch_pd_tomerge['obj_id'] = xmatch_pd['obj_id'].values
-    xmatch_pd_tomerge['angDist'] = xmatch_pd['angDist'].values
+    xmatch_pd_clean = xmatch_pd.sort_values('angDist').drop_duplicates(subset = 'obj_id', keep='first')
+    xmatch_pd_tomerge = xmatch_pd_clean.iloc[:, 210:].copy()
+    xmatch_pd_tomerge['obj_id'] = xmatch_pd_clean['obj_id'].values
+    xmatch_pd_tomerge['angDist'] = xmatch_pd_clean['angDist'].values
     merge_xmatch = df1_pd.merge(xmatch_pd_tomerge, how='left', left_on='obj_id', right_on='obj_id')
-    merged_pd = merge_xmatch.drop_duplicates(subset='obj_id', keep='first') # because there are 13 stars that are duplicated -- two Gaia sources are within 0.5 arcsec from Decaps2. Only keep the closer one. 
-    pd_merged = Table.from_pandas(merged_pd) # convert back to astropy table # pd_merged.write("/Users/anniegao/Documents/CG_mapping_files/CG31/CG31_Decaps2Gaia_crossmatched.csv",format='csv')
+    # merged_pd = merge_xmatch.drop_duplicates(subset='obj_id', keep='first') # because there are 13 stars that are duplicated -- two Gaia sources are within 0.5 arcsec from Decaps2. Only keep the closer one. 
+    pd_merged = Table.from_pandas(merge_xmatch) # convert back to astropy table # pd_merged.write("/Users/anniegao/Documents/CG_mapping_files/CG31/CG31_Decaps2Gaia_crossmatched.csv",format='csv')
     print('Finished crossmatching with Gaia')
     ## Cross Match with 2MASS
     twomass_xmatched = XMatch.query(cat1 = df1, cat2 = 'vizier:II/246/out', max_distance= 0.5*u.arcsec, colRA1='ra', colDec1='dec')
     twomass_xmatch_pd = twomass_xmatched.to_pandas()
+    twomass_xmatch_pd = twomass_xmatch_pd.sort_values('angDist').drop_duplicates(subset='obj_id', keep='first')
     twomass_xmatch_id = twomass_xmatch_pd.iloc[:, 210:211]
     twomass_xmatch_id['obj_id'] = twomass_xmatch_pd['obj_id'].values
     twomass_xmatch_id['angDist'] = twomass_xmatch_pd['angDist'].values
@@ -136,13 +138,28 @@ def query_region(p1, p2, p3, p4, region_name):
     merge2 = merge1.merge(df3.to_pandas().iloc[:, 2:], how='left',left_on='2MASS', right_on = 'designation') # Table.from_pandas(merge2).write("/Users/anniegao/Documents/CG_mapping_files/CG31/CG31_Decaps2TwoMASS_crossmatched.csv",format='csv', overwrite=True)
     print('Finished crossmatching with 2MASS')
     ## Merge three tables
-    a = merge2.iloc[:, 209:]
-    a['obj_id'] = merge2['obj_id']
-    decaps_2mass_gaia = pd_merged.to_pandas().merge(a, on = 'obj_id') # merge Decaps + 2MASS with Decaps + Gaia 
+    a = merge2.iloc[:, 209:].copy()
+    a['obj_id'] = merge2['obj_id'].values
+    decaps_2mass_gaia = pd_merged.to_pandas().merge(a, on = 'obj_id', how = 'left') # merge Decaps + 2MASS with Decaps + Gaia 
     output_path = f'{folder_name}_decaps_2mass_gaia.csv'
     Table.from_pandas(decaps_2mass_gaia).write(output_path,format='csv', overwrite=True)
     print(f"[{region_name}] All catalogs merged and saved to:\n→ {output_path}")
     return decaps_2mass_gaia
+
+def xmatch_unwise(region_name):
+    pd_current = pd.read_csv(f'/Users/anniegao/Documents/CG_mapping_files/1-queried_stars/{region_name}_decaps_2mass_gaia.csv')
+    unwise_xmatched = XMatch.query(cat1 = Table.from_pandas(pd_current), cat2='vizier:II/363/unwise', max_distance= 0.5*u.arcsec, colRA1='ra', colDec1='dec').to_pandas()
+    unwise_clean = (
+        unwise_xmatched
+        .sort_values('angDist')
+        .drop_duplicates(subset='obj_id', keep='first')
+    )
+    unwise_pd_tomerge = unwise_clean.iloc[:, 414:].copy()
+    unwise_pd_tomerge['obj_id'] = unwise_clean['obj_id'].values
+    unwise_pd_tomerge['angDist_unwise'] = unwise_clean['angDist'].values
+    merge_xmatch = pd_current.merge(unwise_pd_tomerge, how='left', on='obj_id')
+    merge_xmatch.to_csv(f'/Users/anniegao/Documents/CG_mapping_files/1-queried_stars/{region_name}_decaps_2mass_gaia_unwise.csv', index=False)
+    return merge_xmatch
 
 def flux_to_mag(flux_vals: np.ndarray, flux_err_vals: np.ndarray):
     """Convert flux to magnitude"""
@@ -176,13 +193,19 @@ def prepare_photometry(pd_merged: Table, max_mag_err = None):
     flux_decam_err = np.c_[pd_merged['err_g'].value, pd_merged['err_r'].value, pd_merged['err_i'].value,pd_merged['err_z'].value, pd_merged['err_y'].value]
     mag_2mass =  np.c_[pd_merged['j_m'].value, pd_merged['h_m'].value, pd_merged['k_m'].value ] #pd_merged['Gmag'], pd_merged['BPmag'], pd_merged['RPmag'],
     magerr_2mass = np.c_[pd_merged['j_msigcom'].value, pd_merged['h_msigcom'].value, pd_merged['k_msigcom'].value]  #pd_merged['e_Gmag'], pd_merged['e_BPmag'], pd_merged['e_RPmag'],
+    flux_unwise = np.c_[pd_merged['FW1'], pd_merged['FW2']]
+    flux_unwise_err = np.c_[pd_merged['e_FW1'], pd_merged['e_FW2']]
+    mag_unwise = -2.5* np.log10(flux_unwise) + 22.5
+    magerr_unwise = 1.086 * (flux_unwise_err/flux_unwise)
     mag_decam, magerr_decam  = flux_to_mag(flux_decam, flux_decam_err) #-2.5*np.log10(flux_decam)
-    mag = np.c_[mag_decam[:], mag_2mass[:]]
-    mag_err = np.c_[magerr_decam[:], magerr_2mass[:]]
+    mag = np.c_[mag_decam[:], mag_2mass[:], mag_unwise[:]]
+    mag_err = np.c_[magerr_decam[:], magerr_2mass[:], magerr_unwise[:]]
     #add 0.02 mag uncertainty in quadrature to decaps
     mag_err[:,0:5] = np.sqrt(mag_err[:,0:5]**2 + config["phot_err"]["decam"]**2)
     #add 0.03 mag uncertainty in quadrature to vvv/2mass
-    mag_err[:,5:] = np.sqrt(mag_err[:,5:]**2 + config["phot_err"]["tmass"]**2)
+    mag_err[:,5:8] = np.sqrt(mag_err[:,5:8]**2 + config["phot_err"]["tmass"]**2)
+    #add 0.04 mag uncertainty in quadrature for unWISE
+    mag_err[:,8:10] = np.sqrt(mag_err[:,8:10]**2 + config["phot_err"]["unwise"]**2)
     # mag=0 means that there is no detection
     mag = np.where(np.isinf(mag), np.nan, mag)
     mag_err = np.where(mag_err>max_mag_err, np.nan, mag_err)
@@ -201,6 +224,8 @@ def create_quality_mask(pd_table: Table, mag: np.ndarray, mag_err: np.ndarray):
 
     min_bands = 4
     min_decam_bands = 1
+    # Convert to flux
+    flux, flux_err = inv_magnitude(mag, mag_err)
     # 2MASS quality flags
     cc_flag_ok = (pd_table['cc_flg']=='000')
     gal_contam_ok = (pd_table['gal_contam'] ==0)
@@ -211,15 +236,20 @@ def create_quality_mask(pd_table: Table, mag: np.ndarray, mag_err: np.ndarray):
     decam_fracflux_avg_ok = np.c_[pd_table['fracflux_avg_g'], pd_table['fracflux_avg_r'],
                                 pd_table['fracflux_avg_i'], pd_table['fracflux_avg_z'],
                                 pd_table['fracflux_avg_y']]
+    # unWISE quality flags
+    unwise_flags = (pd_table['FlagsW1'] == 0) & (pd_table['FlagsW2']==0)
+    unwise_err_ok = (pd_table['e_FW1'] <0.05) & (pd_table['e_FW2']< 0.05)
+    unwise_fraclux_ok = (pd_table['fFW1']> 0.85) & (pd_table['fFW2']> 0.85)
     # Valid measurements
-    valid_decam = (mag[:, :5]>0) & (decam_nmag_cflux_ok>0) & (decam_fracflux_avg_ok>0.75)
-    valid_2mass =(mag[:, 5:8]>0) & (cc_flag_ok[:, None]) & (gal_contam_ok[:, None])
-    # Convert to flux for final mask
-    flux, flux_err = inv_magnitude(mag, mag_err)
+    valid_decam = (flux[:, :5]>0) & (decam_nmag_cflux_ok>0) & (decam_fracflux_avg_ok>0.75)
+    valid_2mass =(flux[:, 5:8]>0) & (cc_flag_ok[:, None]) & (gal_contam_ok[:, None])
+    valid_unwise = (flux[:, 8:10]>0) & (unwise_flags[:, None]) & (unwise_err_ok[:, None]) & (unwise_fraclux_ok[:, None])# Convert to flux for final mask
+
     # Clean mask
     clean = np.isfinite(flux) & np.isfinite(flux_err) & (flux_err > 0.)
     clean[:, :5] *= valid_decam
     clean[:, 5:8] *= valid_2mass
+    clean[:, 8:10] *= valid_unwise
     # threshold on number of good bands
     final_mask = (np.sum(clean, axis=1) >= min_bands) & (np.sum(clean[:, :5], axis=1) >= min_decam_bands)
     return final_mask
@@ -294,7 +324,7 @@ def fit_brutus(cleaned_data, region_name, tag):
     mag_err_sel = cleaned_data['mag_err']
     parallax = cleaned_data['parallax']
     parallax_err = cleaned_data['parallax_err']
-    filt = filters.decam[1:] + filters.tmass[:] #+ filters.vista[2:] #+filters.gaia[:]
+    filt = filters.decam[1:] + filters.tmass[:] + filters.wise[:2] #+filters.gaia[:]
     # zero points
     zp_mist = brutus.utils.load_offsets(OFFSET_FILE,filters=filt)
     # import MIST model grid
